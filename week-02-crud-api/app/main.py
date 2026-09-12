@@ -1,69 +1,97 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import logging
+from typing import Any
+
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
+
+# Setup secure application logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("TaskAPI")
 
 app = FastAPI(
     title="Task API",
     version="1.0.0",
-    description="A simple CRUD API built with FastAPI.",
+    description="A robust, production-ready CRUD API built with FastAPI.",
 )
 
 
-# Pydantic Models
+# Global 404 Route Not Found Fallback Layer
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, __):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND, content={"error": "Route not found"}
+    )
+
+
+@app.middleware("http")
+async def safe_exception_middleware(request: Request, call_next):
+    try:
+        # Pass the request down the pipeline
+        return await call_next(request)
+    except Exception as exc:
+        # 1. Print ONLY your clean, single-line error log
+        logger.error(
+            f"💥 CRASH on {request.url.path} | Reason: {type(exc).__name__}: {exc}"
+        )
+
+        # 2. Return clean JSON payload (Swallowing the traceback)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Internal server error"},
+        )
 
 
 class Task(BaseModel):
-    """Represents a task."""
+    """Represents a validated task record."""
 
     id: int
-    title: str
-    done: bool
+    title: str = Field(
+        ..., min_length=1, description="The title of the task cannot be empty."
+    )
+    done: bool = Field(default=False)
 
 
 class TaskCreate(BaseModel):
-    """Schema for creating a new task."""
+    """Schema for creating a new task with built-in request validation."""
 
-    title: str
+    title: str = Field(..., min_length=1, description="Task title is required.")
+
+    @field_validator("title")
+    @classmethod
+    def validate_title_not_empty(cls, value: str) -> str:
+        """Strips whitespace and ensures the title contains actual text."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Title cannot consist solely of whitespace.")
+        return stripped
 
 
 class TaskUpdate(BaseModel):
-    """Schema for updating an existing task."""
+    """Schema for updating an existing task record."""
 
-    title: str | None = None
-    done: bool | None = None
+    title: str | None = Field(default=None, min_length=1)
+    done: bool | None = Field(default=None)
+
+    @field_validator("title")
+    @classmethod
+    def validate_optional_title(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Updated title cannot be empty.")
+        return value if value is None else value.strip()
 
 
-# In-Memory Database
-
-
-tasks = [
-    {
-        "id": 1,
-        "title": "Learn FastAPI",
-        "done": False,
-    },
-    {
-        "id": 2,
-        "title": "Build CRUD API",
-        "done": False,
-    },
-    {
-        "id": 3,
-        "title": "Push to GitHub",
-        "done": False,
-    },
+# --- IN-MEMORY MOCK DATABASE ---
+tasks: list[dict[str, Any]] = [
+    {"id": 1, "title": "Learn FastAPI", "done": False},
+    {"id": 2, "title": "Build CRUD API", "done": False},
+    {"id": 3, "title": "Push to GitHub", "done": False},
 ]
 
 
-# Routes
-
-
-@app.get(
-    "/",
-    summary="API Information",
-    description="Returns basic information about the API.",
-)
+@app.get("/", summary="API Information", tags=["System"])
 def root():
-    """Return API metadata."""
+    """Returns basic metadata about the API ecosystem."""
     return {
         "name": "Task API",
         "version": "1.0",
@@ -71,128 +99,113 @@ def root():
     }
 
 
-@app.get(
-    "/health",
-    summary="Health Check",
-    description="Returns the current health status of the API.",
-)
+@app.get("/health", summary="Health Check", tags=["System"])
 def get_health():
-    """Return the health status of the API."""
+    """Returns the direct system operational status."""
     return {
-        "status": "Okay",
+        "status": "Healthy",
         "service": "Task API",
-        "version": "1.0",
     }
 
 
-@app.get(
-    "/tasks",
-    response_model=list[Task],
-    summary="Get all tasks",
-    description="Returns all available tasks.",
-)
+@app.get("/tasks", response_model=list[Task], summary="Get all tasks", tags=["Tasks"])
 def get_tasks():
-    """Return all tasks."""
-    return tasks
+    """Fetches every single task from the persistence store."""
+    try:
+        return tasks
+    except Exception as e:
+        logger.error(f"Database read failure: {e}")
+        raise
 
 
 @app.get(
-    "/tasks/{task_id}",
-    response_model=Task,
-    summary="Get task by ID",
-    description="Returns a task matching the provided ID.",
+    "/tasks/{task_id}", response_model=Task, summary="Get task by ID", tags=["Tasks"]
 )
 def get_task(task_id: int):
-    """Return a single task."""
+    """Fetches a solitary task record corresponding to the provided ID."""
+    try:
+        for task in tasks:
+            if task["id"] == task_id:
+                return task
 
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Task {task_id} not found.",
-    )
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch task {task_id}: {e}")
+        raise
 
 
 @app.post(
     "/tasks",
     response_model=Task,
-    status_code=201,
+    status_code=status.HTTP_201_CREATED,
     summary="Create a task",
-    description="Creates a new task.",
+    tags=["Tasks"],
 )
-def create_task(task: TaskCreate):
-    """Create a new task."""
-
-    if not task.title.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Title cannot be empty.",
-        )
-
-    new_task = {
-        "id": len(tasks) + 1,
-        "title": task.title,
-        "done": False,
-    }
-
-    tasks.append(new_task)
-
-    return new_task
+def create_task(task_data: TaskCreate):
+    """Generates and stores a brand new task record."""
+    try:
+        new_id = max((t["id"] for t in tasks), default=0) + 1
+        new_task = {
+            "id": new_id,
+            "title": task_data.title,
+            "done": False,
+        }
+        tasks.append(new_task)
+        return new_task
+    except Exception as e:
+        logger.error(f"Task creation transaction aborted: {e}")
+        raise
 
 
 @app.put(
-    "/tasks/{task_id}",
-    response_model=Task,
-    summary="Update a task",
-    description="Updates a task's title, completion status, or both.",
+    "/tasks/{task_id}", response_model=Task, summary="Update a task", tags=["Tasks"]
 )
-def update_task(task_id: int, updated_task: TaskUpdate):
-    """Update an existing task."""
+def update_task(task_id: int, updated_data: TaskUpdate):
+    """Updates a task's title status, completion flag context, or both."""
+    try:
+        if updated_data.title is None and updated_data.done is None:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "error": "At least one valid field must be provided to initiate an update."
+                },
+            )
 
-    if updated_task.title is None and updated_task.done is None:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one field must be provided for update.",
+        for task in tasks:
+            if task["id"] == task_id:
+                if updated_data.title is not None:
+                    task["title"] = updated_data.title
+                if updated_data.done is not None:
+                    task["done"] = updated_data.done
+                return task
+
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
         )
-
-    for task in tasks:
-        if task["id"] == task_id:
-            if updated_task.title is not None:
-                if not updated_task.title.strip():
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Title cannot be empty.",
-                    )
-                task["title"] = updated_task.title
-
-            if updated_task.done is not None:
-                task["done"] = updated_task.done
-
-            return task
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Task {task_id} not found.",
-    )
+    except Exception as e:
+        logger.error(f"Task updates failed for ID {task_id}: {e}")
+        raise
 
 
 @app.delete(
     "/tasks/{task_id}",
-    status_code=204,
+    status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a task",
-    description="Deletes a task by its ID.",
+    tags=["Tasks"],
 )
 def delete_task(task_id: int):
-    """Delete a task."""
+    """Purges a unique task from the persistence registry via ID match."""
+    try:
+        for index, task in enumerate(tasks):
+            if task["id"] == task_id:
+                tasks.pop(index)
+                return None
 
-    for index, task in enumerate(tasks):
-        if task["id"] == task_id:
-            tasks.pop(index)
-            return
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Task {task_id} not found.",
-    )
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
+        )
+    except Exception as e:
+        logger.error(f"Deletion lifecycle crash for ID {task_id}: {e}")
+        raise
