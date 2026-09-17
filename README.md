@@ -125,6 +125,17 @@ server starts:
 uv run python tests/test.py
 ```
 
+### Latest automated verification
+
+```text
+$ uv run pytest tests/
+======================== 17 passed, 1 warning in 1.56s ========================
+```
+
+All CRUD, persistence, timestamp migration, search, filtering, sorting, and
+statistics checks passed. The warning is emitted by the current FastAPI test
+client dependency and does not affect the passing test result.
+
 ## Project evidence
 
 Swagger UI:
