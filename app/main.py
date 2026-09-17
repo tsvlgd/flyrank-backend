@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, status
@@ -22,8 +23,36 @@ SEED_TASKS = [
 ]
 
 
+def utc_now() -> str:
+    """Return a timezone-aware timestamp in a sortable ISO-8601 format."""
+    return datetime.now(UTC).isoformat()
+
+
+def migrate_timestamp_columns(connection: sqlite3.Connection) -> None:
+    """Add and backfill timestamps for databases created before this extra."""
+    column_names = {
+        row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+    migration_time = utc_now()
+
+    # Existing rows receive NULL for newly added SQLite columns; fill them below.
+    if "created_at" not in column_names:
+        connection.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
+    if "updated_at" not in column_names:
+        connection.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT")
+
+    connection.execute(
+        "UPDATE tasks SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
+        (migration_time,),
+    )
+    connection.execute(
+        "UPDATE tasks SET updated_at = ? WHERE updated_at IS NULL OR updated_at = ''",
+        (migration_time,),
+    )
+
+
 def initialise_database() -> None:
-    """Create the table and add example tasks only on the first run."""
+    """Create or upgrade the table, then seed an empty database once."""
     # We open a temporary standalone connection just for initialization
     connection = sqlite3.connect(DATABASE_PATH)
     try:
@@ -32,15 +61,22 @@ def initialise_database() -> None:
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY,
                 title TEXT NOT NULL,
-                done BOOLEAN NOT NULL
+                done BOOLEAN NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """
         )
-        # Fetch count safely
+        migrate_timestamp_columns(connection)
         task_count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         if task_count == 0:
+            seed_time = utc_now()
             connection.executemany(
-                "INSERT INTO tasks (title, done) VALUES (?, ?)", SEED_TASKS
+                """
+                INSERT INTO tasks (title, done, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(title, done, seed_time, seed_time) for title, done in SEED_TASKS],
             )
         connection.commit()
     finally:
@@ -117,6 +153,16 @@ class Task(BaseModel):
         ..., min_length=1, description="The title of the task cannot be empty."
     )
     done: bool = Field(default=False)
+    created_at: str
+    updated_at: str
+
+
+class TaskStats(BaseModel):
+    """Summary counts calculated by SQLite."""
+
+    total: int
+    completed: int
+    incomplete: int
 
 
 class TaskCreate(BaseModel):
@@ -167,10 +213,58 @@ def get_health():
     }
 
 
+@app.get(
+    "/stats",
+    response_model=TaskStats,
+    summary="Task stats",
+    tags=["Tasks"],
+)
+def get_stats(connection: sqlite3.Connection = Depends(database_connection)):
+    """Returns task counts calculated by SQL, not by Python loops."""
+    cursor = connection.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN done = 1 THEN 1 ELSE 0 END) AS completed
+        FROM tasks;
+        """
+    )
+
+    row = cursor.fetchone()
+
+    total = row["total"] if row["total"] else 0
+    completed = row["completed"] if row["completed"] else 0
+    incomplete = total - completed
+
+    return {"total": total, "completed": completed, "incomplete": incomplete}
+
+
 @app.get("/tasks", response_model=list[Task], summary="Get all tasks", tags=["Tasks"])
-def get_tasks(connection: sqlite3.Connection = Depends(database_connection)):
+def get_tasks(
+    search: str | None = None,
+    done: bool | None = None,
+    connection: sqlite3.Connection = Depends(database_connection),
+):
     """Fetches every single task from the persistence store."""
-    rows = connection.execute("SELECT * FROM tasks").fetchall()
+    # Build one SQL query from only the filters the client supplied.
+    sql = "SELECT * FROM tasks"
+    conditions: list[str] = []
+    parameters: list[str | int] = []
+
+    if search is not None:
+        conditions.append("title LIKE ?")
+        parameters.append(f"%{search}%")
+
+    if done is not None:
+        conditions.append("done = ?")
+        parameters.append(int(done))
+
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY title COLLATE NOCASE ASC"
+
+    rows = connection.execute(sql, parameters).fetchall()
+
     return [dict(row) for row in rows]
 
 
@@ -203,9 +297,13 @@ def create_task(
     connection: sqlite3.Connection = Depends(database_connection),
 ):
     """Generates and stores a brand new task record."""
+    now = utc_now()
     cursor = connection.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (task_data.title, False),
+        """
+        INSERT INTO tasks (title, done, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (task_data.title, False, now, now),
     )
     task = connection.execute(
         "SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)
@@ -239,11 +337,23 @@ def update_task(
 
     title = updated_data.title if updated_data.title is not None else task["title"]
     done = updated_data.done if updated_data.done is not None else task["done"]
+    updated_at = utc_now()
     connection.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?", (title, done, task_id)
+        """
+        UPDATE tasks
+        SET title = ?, done = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (title, done, updated_at, task_id),
     )
     connection.commit()
-    return {"id": task_id, "title": title, "done": done}
+    return {
+        "id": task_id,
+        "title": title,
+        "done": done,
+        "created_at": task["created_at"],
+        "updated_at": updated_at,
+    }
 
 
 @app.delete(
