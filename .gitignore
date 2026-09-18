@@ -7,3 +7,4 @@ htmlcov/
 .python-version
 tasks.db
 docs/Assignments/
+.env
