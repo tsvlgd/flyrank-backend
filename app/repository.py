@@ -41,6 +41,33 @@ def initialise_database() -> None:
             )
 
 
+# TODO
+
+""" 
+1. Only after core CRUD works, bring back your optional SQLite extras—timestamps, filters, search, ordering—in PostgreSQL form.
+2. equivalent PostgreSQL endpoint has to be tested.
+"""
+
+
+def get_stats():
+    with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT 
+            COUNT(*) AS total,
+            SUM(CASE WHEN done THEN 1 ELSE 0 END) AS completed
+            FROM tasks;
+            """
+        )
+
+        row = cursor.fetchone()
+        total = row["total"] if row["total"] else 0
+        completed = row["completed"] if row["completed"] else 0
+
+        leftovers = total - completed
+        return {"total": total, "completed": completed, "incomplete": leftovers}
+
+
 def get_all_tasks():
     with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute("SELECT * FROM tasks ORDER BY id")
@@ -93,7 +120,6 @@ def update_task(task_id: int, title: str | None, done: bool | None):
 
 
 def delete_task(task_id: int) -> bool:
-    with connect() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
-            return cursor.rowcount == 1
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        return cursor.rowcount == 1

@@ -3,7 +3,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -13,6 +13,18 @@ from . import repository
 # Setup secure application logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TaskAPI")
+
+
+""""
+1. Start Postgres and manually verify all core routes.
+2. Replace SQLite pytest fixture with a tasks_test Postgres setup.
+3. Remove stale SQLite code and old SQLite-only tests.
+4. Restore search/filter/order extras using Postgres SQL.
+5. Learn Alembic and restore timestamps via a formal Postgres migration.
+6. Add Dockerfile and Compose after direct local Postgres behavior is stable.
+7. Later learn async Psycopg and pooling.
+
+"""
 
 
 def utc_now() -> str:
@@ -211,24 +223,9 @@ def get_health():
     summary="Task stats",
     tags=["Tasks"],
 )
-def get_stats(connection: sqlite3.Connection = Depends(database_connection)):
+def get_stats():
     """Returns task counts calculated by SQL, not by Python loops."""
-    cursor = connection.execute(
-        """
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN done = 1 THEN 1 ELSE 0 END) AS completed
-        FROM tasks;
-        """
-    )
-
-    row = cursor.fetchone()
-
-    total = row["total"] if row["total"] else 0
-    completed = row["completed"] if row["completed"] else 0
-    incomplete = total - completed
-
-    return {"total": total, "completed": completed, "incomplete": incomplete}
+    return repository.get_stats()
 
 
 @app.get("/tasks", response_model=list[Task], summary="Get all tasks", tags=["Tasks"])
