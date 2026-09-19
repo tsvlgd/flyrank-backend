@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from . import repository
+
 # Setup secure application logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TaskAPI")
@@ -98,7 +100,7 @@ def database_connection():
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    initialise_database()
+    repository.initialise_database()
     yield
 
 
