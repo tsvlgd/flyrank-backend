@@ -2,7 +2,6 @@ import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -14,15 +13,6 @@ from . import repository
 # Setup secure application logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TaskAPI")
-
-
-# SQLite creates this file automatically when the application starts.
-DATABASE_PATH = Path(__file__).resolve().parent.parent / "tasks.db"
-SEED_TASKS = [
-    ("Learn FastAPI", False),
-    ("Build CRUD API", False),
-    ("Push to GitHub", False),
-]
 
 
 def utc_now() -> str:
@@ -246,36 +236,6 @@ def get_tasks():
     return repository.get_all_tasks()
 
 
-"""
-def get_tasks(
-    search: str | None = None,
-    done: bool | None = None,
-    connection: sqlite3.Connection = Depends(database_connection),
-):
-    "Fetches every single task from the persistence store."
-    # Build one SQL query from only the filters the client supplied.
-    sql = "SELECT * FROM tasks"
-    conditions: list[str] = []
-    parameters: list[str | int] = []
-
-    if search is not None:
-        conditions.append("title LIKE ?")
-        parameters.append(f"%{search}%")
-
-    if done is not None:
-        conditions.append("done = ?")
-        parameters.append(int(done))
-
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY title COLLATE NOCASE ASC"
-
-    rows = connection.execute(sql, parameters).fetchall()
-
-    return [dict(row) for row in rows]
-"""
-
-
 @app.get(
     "/tasks/{task_id}", response_model=Task, summary="Get task by ID", tags=["Tasks"]
 )
@@ -286,23 +246,6 @@ def get_task(task_id: int):
     return task
 
 
-"""
-def get_task(
-    task_id: int, connection: sqlite3.Connection = Depends(database_connection)
-):
-    "Fetches a solitary task record corresponding to the provided ID"
-    task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-
-    if task is not None:
-        return dict(task)
-
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
-    )
-
-"""
-
-
 @app.post(
     "/tasks",
     response_model=Task,
@@ -310,34 +253,14 @@ def get_task(
     summary="Create a task",
     tags=["Tasks"],
 )
-def create_task(
-    task_data: TaskCreate,
-    connection: sqlite3.Connection = Depends(database_connection),
-):
-    """Generates and stores a brand new task record."""
-    now = utc_now()
-    cursor = connection.execute(
-        """
-        INSERT INTO tasks (title, done, created_at, updated_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (task_data.title, False, now, now),
-    )
-    task = connection.execute(
-        "SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)
-    ).fetchone()
-    connection.commit()
-    return dict(task)
+def create_task(task_data: TaskCreate):
+    return repository.create_task(task_data.title)
 
 
 @app.put(
     "/tasks/{task_id}", response_model=Task, summary="Update a task", tags=["Tasks"]
 )
-def update_task(
-    task_id: int,
-    updated_data: TaskUpdate,
-    connection: sqlite3.Connection = Depends(database_connection),
-):
+def update_task(task_id: int, updated_data: TaskUpdate):
     """Updates a task's title status, completion flag context, or both."""
     if updated_data.title is None and updated_data.done is None:
         return JSONResponse(
@@ -346,32 +269,12 @@ def update_task(
                 "error": "At least one valid field must be provided to initiate an update."
             },
         )
-
-    task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    task = repository.update_task(task_id, updated_data.title, updated_data.done)
     if task is None:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
         )
-
-    title = updated_data.title if updated_data.title is not None else task["title"]
-    done = updated_data.done if updated_data.done is not None else task["done"]
-    updated_at = utc_now()
-    connection.execute(
-        """
-        UPDATE tasks
-        SET title = ?, done = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (title, done, updated_at, task_id),
-    )
-    connection.commit()
-    return {
-        "id": task_id,
-        "title": title,
-        "done": done,
-        "created_at": task["created_at"],
-        "updated_at": updated_at,
-    }
+    return {"id": task["id"], "title": task["title"], "done": task["done"]}
 
 
 @app.delete(
@@ -380,14 +283,9 @@ def update_task(
     summary="Delete a task",
     tags=["Tasks"],
 )
-def delete_task(
-    task_id: int,
-    connection: sqlite3.Connection = Depends(database_connection),
-):
+def delete_task(task_id: int):
     """Purges a unique task from the persistence registry via ID match."""
-    cursor = connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    connection.commit()
-    if cursor.rowcount == 1:
+    if repository.delete_task(task_id):
         return None
 
     return JSONResponse(
