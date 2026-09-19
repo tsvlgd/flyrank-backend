@@ -40,7 +40,6 @@ def initialise_database() -> None:
                 SEED_TASKS,
             
 
-
 def get_stats():
     with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
