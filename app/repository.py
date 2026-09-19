@@ -2,6 +2,7 @@ import os
 
 import psycopg
 from dotenv import load_dotenv
+from psycopg.rows import dict_row
 
 load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -38,3 +39,15 @@ def initialise_database() -> None:
                 "INSERT INTO tasks (title, done) VALUES (%s, %s)",
                 SEED_TASKS,
             )
+
+
+def get_all_tasks():
+    with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM tasks ORDER BY id")
+        return cursor.fetchall()
+
+
+def get_task_by_id(task_id: int):
+    with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
+        return cursor.fetchone()

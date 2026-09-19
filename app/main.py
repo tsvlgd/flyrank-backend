@@ -155,8 +155,8 @@ class Task(BaseModel):
         ..., min_length=1, description="The title of the task cannot be empty."
     )
     done: bool = Field(default=False)
-    created_at: str
-    updated_at: str
+    # created_at: str
+    # updated_at: str
 
 
 class TaskStats(BaseModel):
@@ -242,12 +242,17 @@ def get_stats(connection: sqlite3.Connection = Depends(database_connection)):
 
 
 @app.get("/tasks", response_model=list[Task], summary="Get all tasks", tags=["Tasks"])
+def get_tasks():
+    return repository.get_all_tasks()
+
+
+"""
 def get_tasks(
     search: str | None = None,
     done: bool | None = None,
     connection: sqlite3.Connection = Depends(database_connection),
 ):
-    """Fetches every single task from the persistence store."""
+    "Fetches every single task from the persistence store."
     # Build one SQL query from only the filters the client supplied.
     sql = "SELECT * FROM tasks"
     conditions: list[str] = []
@@ -268,15 +273,24 @@ def get_tasks(
     rows = connection.execute(sql, parameters).fetchall()
 
     return [dict(row) for row in rows]
+"""
 
 
 @app.get(
     "/tasks/{task_id}", response_model=Task, summary="Get task by ID", tags=["Tasks"]
 )
+def get_task(task_id: int):
+    task = repository.get_task_by_id(task_id)
+    if task is None:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+    return task
+
+
+"""
 def get_task(
     task_id: int, connection: sqlite3.Connection = Depends(database_connection)
 ):
-    """Fetches a solitary task record corresponding to the provided ID."""
+    "Fetches a solitary task record corresponding to the provided ID"
     task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
     if task is not None:
@@ -285,6 +299,8 @@ def get_task(
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
     )
+
+"""
 
 
 @app.post(
