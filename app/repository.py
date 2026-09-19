@@ -38,15 +38,7 @@ def initialise_database() -> None:
             cursor.executemany(
                 "INSERT INTO tasks (title, done) VALUES (%s, %s)",
                 SEED_TASKS,
-            )
-
-
-# TODO
-
-""" 
-1. Only after core CRUD works, bring back your optional SQLite extras—timestamps, filters, search, ordering—in PostgreSQL form.
-2. equivalent PostgreSQL endpoint has to be tested.
-"""
+            
 
 
 def get_stats():
