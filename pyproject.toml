@@ -11,11 +11,11 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "uvicorn>=0.51.0",
+    "alembic>=1.18.0",
 ]
 
 [dependency-groups]
 dev = [
-    "alembic>=1.18.0",
     "httpx>=0.28.0",
     "pytest>=8.0.0",
 ]
