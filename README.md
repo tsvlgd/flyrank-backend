@@ -75,3 +75,26 @@ Automated tests use the separate PostgreSQL database named `tasks_test`. Before 
 $ uv run pytest
 ======================= 13 passed, 14 warnings in 9.14s ========================
 ```
+
+## Next Week's Goals & Assignment Checklist
+
+**Goal & purpose**: Build a secure API that handles user authentication — Sign Up, Log In, Log Out — and protects specific routes so they answer only for logged-in users. We will use Supabase Auth as the Identity Provider (IdP) to manage accounts, issue JSON Web Tokens (JWTs), verify those tokens to guard "user-only" endpoints, document the flow in Swagger UI, and publish everything to GitHub. 
+
+We will avoid rolling our own cryptography and instead lean on a trusted IdP. Supabase stores the accounts, hashes the passwords, and signs the tokens; our job is receiving a token, verifying it, and opening (or refusing) the door.
+
+### Task Checklist
+- [ ] **Setup Supabase Auth**: Configure Supabase as our Identity Provider.
+- [ ] **JWT Verification**: Implement FastAPI dependency to verify incoming Supabase JWTs.
+- [ ] **Protect Endpoints**: Guard specific routes so they are only accessible to authenticated users.
+- [ ] **Redis Rate Limiting**: Utilize our new Redis integration to build a robust rate limiter for our endpoints.
+- [ ] **Swagger UI Auth Integration**: Update FastAPI Swagger UI to accept Bearer tokens for easy testing.
+- [ ] **GitHub Publish**: Push the authenticated API up to GitHub.
+
+### Why an Identity Provider (IdP) instead of Manual Auth?
+* **The Danger of Manual Auth:** Building auth from scratch means writing your own cryptography, password hashing, and reset flows. A single mistake can compromise all user data.
+* **Separation of Concerns:** A backend API should focus on business logic (managing tasks). Offloading auth to an IdP keeps the codebase clean and focused.
+* **The "VIP Pass" Flow:** 
+  1. The user authenticates directly with the IdP (e.g., Supabase).
+  2. The IdP issues a cryptographically signed JSON Web Token (JWT).
+  3. The user passes this JWT to our FastAPI backend.
+  4. Our backend mathematically verifies the signature and grants access, all without ever seeing the user's password.
