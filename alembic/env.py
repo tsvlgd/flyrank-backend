@@ -16,8 +16,15 @@ def sqlalchemy_database_url() -> str:
     return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
+from app.models import metadata
+target_metadata = metadata
+
 def run_migrations_offline() -> None:
-    context.configure(url=sqlalchemy_database_url(), literal_binds=True)
+    context.configure(
+        url=sqlalchemy_database_url(), 
+        literal_binds=True, 
+        target_metadata=target_metadata
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -28,7 +35,10 @@ def run_migrations_online() -> None:
     connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(connection=connection)
+        context.configure(
+            connection=connection, 
+            target_metadata=target_metadata
+        )
         with context.begin_transaction():
             context.run_migrations()
 
