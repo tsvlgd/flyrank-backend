@@ -30,6 +30,7 @@ def seed_tasks_if_empty() -> None:
                 """
                 INSERT INTO tasks (title, done, created_at, updated_at)
                 VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (title) DO NOTHING
                 """,
                 SEED_TASKS,
             )
