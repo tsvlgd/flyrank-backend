@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
         conninfo=repository.DATABASE_URL,
         min_size=2,
         max_size=10,
+        open=False,
     )
     await repository.pool.open()
     await repository.seed_tasks_if_empty()
