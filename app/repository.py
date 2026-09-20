@@ -5,12 +5,11 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
 load_dotenv()
-DATABASE_URL = os.environ["DATABASE_URL"]
 
 
 def connect():
-    """Open a PostgreSQL connection using configuration, never a hardcoded URL."""
-    return psycopg.connect(DATABASE_URL)
+    """Open a connection using the DATABASE_URL active for this operation."""
+    return psycopg.connect(os.environ["DATABASE_URL"])
 
 
 SEED_TASKS = [
@@ -20,48 +19,59 @@ SEED_TASKS = [
 ]
 
 
-def initialise_database() -> None:
+def seed_tasks_if_empty() -> None:
+    """Insert example rows only after migrations have created an empty table."""
     with connect() as connection, connection.cursor() as cursor:
-        cursor.execute(
-            """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    done BOOLEAN NOT NULL
-                )
-                """
-        )
         cursor.execute("SELECT COUNT(*) FROM tasks")
         task_count = cursor.fetchone()[0]
 
         if task_count == 0:
             cursor.executemany(
-                "INSERT INTO tasks (title, done) VALUES (%s, %s)",
+                """
+                INSERT INTO tasks (title, done, created_at, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
                 SEED_TASKS,
-            
+            )
 
 def get_stats():
     with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT 
+            SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN done THEN 1 ELSE 0 END) AS completed
-            FROM tasks;
+            COALESCE(SUM(CASE WHEN done THEN 1 ELSE 0 END), 0) AS completed
+            FROM tasks
             """
         )
 
         row = cursor.fetchone()
-        total = row["total"] if row["total"] else 0
-        completed = row["completed"] if row["completed"] else 0
+        return {
+            "total": row["total"],
+            "completed": row["completed"],
+            "incomplete": row["total"] - row["completed"],
+        }
 
-        leftovers = total - completed
-        return {"total": total, "completed": completed, "incomplete": leftovers}
 
-
-def get_all_tasks():
+def get_all_tasks(search: str | None = None, done: bool | None = None):
     with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT * FROM tasks ORDER BY id")
+        sql = "SELECT * FROM tasks"
+        conditions: list[str] = []
+        parameters: list[str | bool] = []
+
+        if search is not None:
+            # ILIKE keeps the old SQLite search experience case-insensitive.
+            conditions.append("title ILIKE %s")
+            parameters.append(f"%{search}%")
+        if done is not None:
+            conditions.append("done = %s")
+            parameters.append(done)
+
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY title ASC"
+
+        cursor.execute(sql, parameters)
         return cursor.fetchall()
 
 
@@ -75,14 +85,12 @@ def create_task(title: str):
     with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-                INSERT INTO tasks (title, done)
-                VALUES (%s, %s)
-                RETURNING id
+                INSERT INTO tasks (title, done, created_at, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING *
                 """,
             (title, False),
         )
-        new_id = cursor.fetchone()["id"]
-        cursor.execute("SELECT * FROM tasks WHERE id = %s", (new_id,))
         return cursor.fetchone()
 
 
@@ -100,7 +108,7 @@ def update_task(task_id: int, title: str | None, done: bool | None):
         cursor.execute(
             """
             UPDATE tasks
-            SET title = %s, done = %s
+            SET title = %s, done = %s, updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             RETURNING *
             """,

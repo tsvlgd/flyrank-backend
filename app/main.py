@@ -1,7 +1,6 @@
 import logging
-import sqlite3
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -15,94 +14,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TaskAPI")
 
 
-""""
-1. Start Postgres and manually verify all core routes.
-2. Replace SQLite pytest fixture with a tasks_test Postgres setup.
-3. Remove stale SQLite code and old SQLite-only tests.
-4. Restore search/filter/order extras using Postgres SQL.
-5. Learn Alembic and restore timestamps via a formal Postgres migration.
-6. Add Dockerfile and Compose after direct local Postgres behavior is stable.
-7. Later learn async Psycopg and pooling.
-
-"""
-
-
-def utc_now() -> str:
-    """Return a timezone-aware timestamp in a sortable ISO-8601 format."""
-    return datetime.now(UTC).isoformat()
-
-
-def migrate_timestamp_columns(connection: sqlite3.Connection) -> None:
-    """Add and backfill timestamps for databases created before this extra."""
-    column_names = {
-        row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
-    }
-    migration_time = utc_now()
-
-    # Existing rows receive NULL for newly added SQLite columns; fill them below.
-    if "created_at" not in column_names:
-        connection.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
-    if "updated_at" not in column_names:
-        connection.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT")
-
-    connection.execute(
-        "UPDATE tasks SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
-        (migration_time,),
-    )
-    connection.execute(
-        "UPDATE tasks SET updated_at = ? WHERE updated_at IS NULL OR updated_at = ''",
-        (migration_time,),
-    )
-
-
-def initialise_database() -> None:
-    """Create or upgrade the table, then seed an empty database once."""
-    # We open a temporary standalone connection just for initialization
-    connection = sqlite3.connect(DATABASE_PATH)
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY,
-                title TEXT NOT NULL,
-                done BOOLEAN NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        migrate_timestamp_columns(connection)
-        task_count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        if task_count == 0:
-            seed_time = utc_now()
-            connection.executemany(
-                """
-                INSERT INTO tasks (title, done, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                [(title, done, seed_time, seed_time) for title, done in SEED_TASKS],
-            )
-        connection.commit()
-    finally:
-        connection.close()
-
-
-def database_connection():
-    """
-    FastAPI dependency that opens a fresh, isolated connection per request.
-    Automatically closes the connection when the request finishes.
-    """
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.row_factory = sqlite3.Row
-    try:
-        yield connection
-    finally:
-        connection.close()
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    repository.initialise_database()
+    repository.seed_tasks_if_empty()
     yield
 
 
@@ -157,12 +71,12 @@ class Task(BaseModel):
         ..., min_length=1, description="The title of the task cannot be empty."
     )
     done: bool = Field(default=False)
-    # created_at: str
-    # updated_at: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class TaskStats(BaseModel):
-    """Summary counts calculated by SQLite."""
+    """Summary counts calculated by PostgreSQL."""
 
     total: int
     completed: int
@@ -229,8 +143,8 @@ def get_stats():
 
 
 @app.get("/tasks", response_model=list[Task], summary="Get all tasks", tags=["Tasks"])
-def get_tasks():
-    return repository.get_all_tasks()
+def get_tasks(search: str | None = None, done: bool | None = None):
+    return repository.get_all_tasks(search, done)
 
 
 @app.get(
@@ -271,7 +185,7 @@ def update_task(task_id: int, updated_data: TaskUpdate):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND, content={"error": "Task not found"}
         )
-    return {"id": task["id"], "title": task["title"], "done": task["done"]}
+    return task
 
 
 @app.delete(

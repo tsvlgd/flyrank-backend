@@ -117,9 +117,13 @@ Run the automated test suite:
 uv run pytest -v
 ```
 
-Each test uses its own temporary SQLite file, so tests never modify your local
-`tasks.db`. A lightweight manual smoke-test script is also available after the
-server starts:
+Automated tests use the separate PostgreSQL database named `tasks_test`, never
+the development `tasks` database. Before each test, pytest empties and reseeds
+only `tasks_test`, so every test begins with the same three tasks. Start the
+Postgres `taskdb` container before running the suite.
+
+A lightweight manual smoke-test script is also available after the server
+starts:
 
 ```bash
 uv run python tests/test.py
@@ -129,12 +133,12 @@ uv run python tests/test.py
 
 ```text
 $ uv run pytest tests/
-======================== 17 passed, 1 warning in 1.56s ========================
+======================== 12 passed, 1 warning in 5.63s ========================
 ```
 
-All CRUD, persistence, timestamp migration, search, filtering, sorting, and
-statistics checks passed. The warning is emitted by the current FastAPI test
-client dependency and does not affect the passing test result.
+All current PostgreSQL CRUD and statistics checks passed. The warning is
+emitted by the current FastAPI test client dependency and does not affect the
+passing test result.
 
 ## Project evidence
 
