@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, String, Table, func
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, MetaData, String, Table, func
 
 metadata = MetaData()
 
@@ -11,3 +11,6 @@ tasks_table = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
 )
+
+Index("ix_tasks_done", tasks_table.c.done)
+

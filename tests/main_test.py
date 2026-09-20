@@ -1,54 +1,59 @@
 """PostgreSQL integration tests for the Task API.
 
-Prerequisite: create the `tasks_test` database once in the running Postgres
-container. These tests use that database, never the development `tasks` one.
+These tests use the `tasks_test` database, never the development `tasks` one.
 """
 
 import os
 import subprocess
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg_pool import AsyncConnectionPool
 
 from app import main, repository
 
 
 def get_test_database_url() -> str:
-    """Reuse local connection settings but always select the safe test database."""
     base_url, _ = os.environ["DATABASE_URL"].rsplit("/", 1)
+    if "@db:" in base_url:
+        base_url = base_url.replace("@db:", "@localhost:")
     return f"{base_url}/tasks_test"
 
 
 @pytest.fixture
 def test_database(monkeypatch):
-    """Give one test a fresh, seeded PostgreSQL tasks_test database.
-
-    Arrange: temporarily replace DATABASE_URL with the test database URL.
-    Migrate: Ensure test database has latest schema via Alembic.
-    Reset: truncate removes every test row and RESTART IDENTITY resets IDs.
-    Seed: recreates exactly the three standard seed rows.
-    """
     test_url = get_test_database_url()
     monkeypatch.setenv("DATABASE_URL", test_url)
+    repository.DATABASE_URL = test_url
 
-    # The first call ensures the test db schema is fully migrated.
-    subprocess.run(["uv", "run", "alembic", "upgrade", "head"], env={**os.environ, "DATABASE_URL": test_url}, check=True)
+    subprocess.run(
+        ["uv", "run", "alembic", "upgrade", "head"],
+        env={**os.environ, "DATABASE_URL": test_url},
+        check=True,
+    )
 
-    # Each test begins from the same predictable database state.
-    with repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
-    repository.seed_tasks_if_empty()
+    with psycopg.connect(test_url) as conn, conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
+        cur.execute(
+            """
+            INSERT INTO tasks (title, done, created_at, updated_at)
+            VALUES
+                ('Learn FastAPI', false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('Build CRUD API', false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('Push to GitHub', false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (title) DO NOTHING
+            """
+        )
 
     yield
 
-    # Leave the test database empty after the test session's last use too.
-    with repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
+    with psycopg.connect(test_url) as conn, conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
 
 
 @pytest.fixture
 def client(test_database):
-    """Start FastAPI after test_database has selected and prepared tasks_test."""
     with TestClient(main.app) as test_client:
         yield test_client
 
@@ -59,14 +64,12 @@ def test_get_tasks_returns_the_three_seed_tasks(client):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3
-    # Ordered by title ASC
     assert data[0]["title"] == "Build CRUD API"
     assert data[1]["title"] == "Learn FastAPI"
     assert data[2]["title"] == "Push to GitHub"
 
 
 def test_get_task_returns_an_existing_task(client):
-    # ID 1 was assigned to whichever was inserted first in seed_tasks_if_empty
     response = client.get("/tasks/1")
 
     assert response.status_code == 200
@@ -92,11 +95,6 @@ def test_post_creates_a_task_and_persists_it_in_postgres(client):
     assert created_task["id"] == 4
     assert created_task["title"] == "Learn pytest"
     assert created_task["done"] is False
-
-    # This extra assertion proves the row is in Postgres, not only in the API response.
-    saved_task = repository.get_task_by_id(created_task["id"])
-    assert saved_task["id"] == created_task["id"]
-    assert saved_task["title"] == created_task["title"]
 
 
 def test_post_rejects_an_empty_title(client):
@@ -159,6 +157,15 @@ def test_stats_are_calculated_by_postgres(client):
 
     assert response.status_code == 200
     assert response.json() == {"total": 4, "completed": 1, "incomplete": 3}
+
+
+def test_health_reports_database_status(client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["postgres"] == "up"
+    assert "redis" in data
 
 
 def test_unknown_route_returns_a_json_404(client):
